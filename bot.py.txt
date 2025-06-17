@@ -1,0 +1,90 @@
+import logging
+import os
+import telebot
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime, time
+
+# Настройки логирования
+logging.basicConfig(level=logging.INFO)
+
+# Переменные окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Авторизация Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("google_credentials.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+
+# График работы
+start_time = time(5, 30)
+end_time = time(20, 0)
+
+def is_working_hours():
+    now = datetime.now().time()
+    return start_time <= now <= end_time
+
+# Приветственное сообщение
+welcome_message = (
+    "Привет! 👋 Вы в каталоге вязаных игрушек ручной работы 🧸\n"
+    "Я помогу вам выбрать игрушку и связаться с мастером.\n\n"
+    "Доступны кнопки:\n"
+    "📦 Каталог — посмотреть все игрушки с ценами\n"
+    "🧵 Связь с мастером — задать вопрос или оформить заказ\n\n"
+    "В карточке каждой игрушки указаны:\n"
+    "📷 Фото\n📐 Размер\n💰 Цена (без учёта доставки)\n📦 Наличие (в наличии, на заказ, осталась 1 штука и т.п.)\n\n"
+    "Бот работает с 5:30 до 20:00 по московскому времени.\nДобро пожаловать! 💛"
+)
+
+# Команда /start
+@bot.message_handler(commands=['start'])
+def start(message):
+    if not is_working_hours():
+        bot.send_message(message.chat.id, "Сейчас бот не работает. Я отвечу в рабочее время с 5:30 до 20:00 по МСК. 🌙")
+        return
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("📦 Каталог", "🧵 Связь с мастером")
+    bot.send_message(message.chat.id, welcome_message, reply_markup=markup)
+
+# Каталог
+@bot.message_handler(func=lambda m: m.text == "📦 Каталог")
+def send_catalog(message):
+    if not is_working_hours():
+        bot.send_message(message.chat.id, "Каталог доступен только в рабочее время с 5:30 до 20:00 по МСК. 🌙")
+        return
+
+    records = sheet.get_all_records()
+    sorted_records = sorted(records, key=lambda x: x.get('Цена', 0))
+    for item in sorted_records:
+        photo_url = item.get("Фото (URL)", "")
+        name = item.get("Название", "")
+        price = item.get("Цена", "")
+        size = item.get("Размер", "")
+        status = item.get("Наличие", "")
+
+        text = f"#{name}\n\n💰 Цена: {price} (без учёта доставки)\n📐 Размер: {size}\n📦 Наличие: {status}"
+
+        if photo_url:
+            bot.send_photo(message.chat.id, photo_url, caption=text)
+        else:
+            bot.send_message(message.chat.id, text)
+
+# Связь с мастером
+@bot.message_handler(func=lambda m: m.text == "🧵 Связь с мастером")
+def contact(message):
+    text = (
+        "Вы можете связаться со мной любым удобным способом:\n\n"
+        "📧 Email: your_email@example.com\n"
+        "💬 Telegram: t.me/your_username"
+    )
+    bot.send_message(message.chat.id, text)
+
+# Запуск бота
+if __name__ == "__main__":
+    bot.polling(none_stop=True)
